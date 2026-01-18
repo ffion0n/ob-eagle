@@ -1,0 +1,9 @@
+{
+  "id": "eagle-bridge-mobile",
+  "name": "Eagle Bridge Mobile Mapper",
+  "version": "0.2.0",
+  "minAppVersion": "1.4.0",
+  "description": "Rewrite Eagle Bridge localhost image URLs to IPv4 on mobile.",
+  "author": "codex",
+  "isDesktopOnly": false
+}

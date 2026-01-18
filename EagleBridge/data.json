@@ -1,0 +1,23 @@
+{
+  "mySetting": "default",
+  "port": 6060,
+  "libraryPath": "D:\\附件管理.library",
+  "folderId": "ME2NP48CXYM3V",
+  "clickView": true,
+  "adaptiveRatio": 0.8,
+  "advancedID": false,
+  "obsidianStoreId": "",
+  "imageSize": 500,
+  "websiteUpload": false,
+  "libraryPaths": [
+    "D:\\附件管理.library"
+  ],
+  "debug": false,
+  "openInObsidian": "newPage",
+  "migrateAttachmentsPath": "附件/图片",
+  "migrateScope": "all",
+  "migrateDeleteOriginal": true,
+  "migrateBackup": false,
+  "migrateWaitImportSeconds": 30,
+  "migrateKeepTemp": false
+}
