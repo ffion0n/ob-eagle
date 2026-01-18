@@ -3,9 +3,6 @@
 
 
 就是时序/竞态问题
-![809d0c3952d8b2b4018f552dd7de02fd_720.png|500](http://localhost:6060/images/MKGLEGDFUUWON.info)
-
-
 
 # 支持批量本地转 eagle
 
