@@ -2503,6 +2503,10 @@ function jumpModal(app, settings) {
 }
 
 // src/addCommand-config.ts
+var EAGLE_BRIDGE_MIGRATE_COMMAND_NAME = "EagleBridge: \u8f6c\u6362\u9644\u4ef6\u5230 Eagle";
+var EAGLE_BRIDGE_RIBBON_ICON_ID = "bird";
+function registerEagleBridgeRibbonIcon() {
+}
 var addCommandSynchronizedPageTabs = (myPlugin) => {
   myPlugin.addCommand({
     id: "synchronized-page-tabs",
@@ -2518,6 +2522,16 @@ var addCommandEagleJump = (myPlugin) => {
     name: "eagle-jump-obsidian",
     callback: async () => {
       jumpModal(myPlugin.app, myPlugin.settings);
+    }
+  });
+};
+var addCommandEagleBridgeMigrateAttachments = (myPlugin) => {
+  myPlugin.addCommand({
+    id: "eaglebridge-migrate-attachments",
+    name: "EagleBridge: 转换附件到 Eagle",
+    name: EAGLE_BRIDGE_MIGRATE_COMMAND_NAME,
+    callback: async () => {
+      await runEagleBridgeMigrateAttachments(myPlugin);
     }
   });
 };
@@ -4198,7 +4212,6 @@ var EmbedWidget = class extends import_view.WidgetType {
         video.src = this.url;
         video.style.width = "100%";
         video.style.height = "auto";
-        video.style.maxHeight = "360px";
         video.className = "eagle-video-player";
         this.container.appendChild(video);
       };
@@ -4497,6 +4510,15 @@ var MyPlugin = class extends import_obsidian7.Plugin {
     });
     addCommandSynchronizedPageTabs(this);
     addCommandEagleJump(this);
+    addCommandEagleBridgeMigrateAttachments(this);
+    registerEagleBridgeRibbonIcon();
+    this.addRibbonIcon(
+      EAGLE_BRIDGE_RIBBON_ICON_ID,
+      EAGLE_BRIDGE_MIGRATE_COMMAND_NAME,
+      async () => {
+        await runEagleBridgeMigrateAttachments(this);
+      }
+    );
     const style = document.createElement("style");
     style.textContent = `
 			.menu-item {
@@ -4557,7 +4579,8 @@ var MyPlugin = class extends import_obsidian7.Plugin {
 			.eagle-video-player {
 				display: block;
 				width: 100%;
-				max-height: 360px;
+				height: auto;
+				max-height: none;
 			}
 			
 			/* \u7F16\u8F91\u6A21\u5F0F\u6837\u5F0F */
