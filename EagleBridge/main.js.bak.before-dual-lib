@@ -1773,11 +1773,7 @@ function resolveLibraryPathForItemId(eagleId, fallbackLibraryPath = "") {
   const id = String(eagleId);
   const mappedPath = eagleItemLibraryMap.get(id);
   if (mappedPath) {
-    const mappedMetadataPath = path.join(mappedPath, "images", `${id}.info`, "metadata.json");
-    if (fs.existsSync(mappedMetadataPath)) {
-      return mappedPath;
-    }
-    eagleItemLibraryMap.delete(id);
+    return mappedPath;
   }
   for (const libraryPath of watchedLibraryPaths) {
     const metadataPath = path.join(libraryPath, "images", `${id}.info`, "metadata.json");
@@ -2226,16 +2222,6 @@ var electron = require("electron");
 var clipboard = electron.clipboard;
 var LIBRARY1_MEDIA_EXTENSIONS = /* @__PURE__ */ new Set(["jpg", "jpeg", "png", "gif", "webp", "svg", "bmp", "avif", "heic", "heif", "mp3", "m4a", "m4b", "aac", "flac", "opus", "oga", "ogg", "wav", "weba"]);
 var IMAGE_EXTENSIONS = /* @__PURE__ */ new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg", ".avif", ".heic", ".heif"]);
-var uploadRoutingQueue = Promise.resolve();
-function runWithUploadRoutingLock(task) {
-  const runTask = async () => task();
-  const next = uploadRoutingQueue.then(runTask, runTask);
-  uploadRoutingQueue = next.then(() => void 0, () => void 0);
-  return next;
-}
-function sleepMs(ms) {
-  return new Promise((resolve3) => setTimeout(resolve3, ms));
-}
 function normalizeLibraryPathValue(pathValue) {
   return (pathValue || "").trim().replace(/[\\/]+$/, "");
 }
@@ -2302,14 +2288,9 @@ function resolveTargetLibraryPath(filePath, settings) {
 function buildEagleInfoUrl(port, eagleId) {
   return `http://localhost:${port}/images/${eagleId}.info`;
 }
-function parseEagleIdFromInfoUrl(fileUrl) {
-  const match = String(fileUrl || "").match(/\/images\/([^/?#]+)\.info/i);
-  return match && match[1] ? match[1] : "";
-}
-function insertUploadedLink(editor, filePath, fileUrl, imageSize, eagleId = "") {
+function insertUploadedLink(editor, filePath, fileUrl, imageSize) {
   const fileName = path2.basename(filePath);
   const fileExtension = path2.extname(filePath).toLowerCase();
-  const resolvedEagleId = eagleId || parseEagleIdFromInfoUrl(fileUrl);
   if (IMAGE_EXTENSIONS.has(fileExtension)) {
     editor.replaceSelection(`![${fileName}|${imageSize}](${fileUrl})`);
     return;
@@ -2336,6 +2317,9 @@ async function switchEagleLibrary(libraryPath) {
       return "";
     }
   };
+  if (normalizeServerLibraryPath(currentLibraryPath) === normalizedPath) {
+    return;
+  }
   const currentBeforeSwitch = await getCurrentPath();
   if (currentBeforeSwitch === normalizedPath) {
     currentLibraryPath = normalizedPath;
@@ -2362,14 +2346,6 @@ async function switchEagleLibrary(libraryPath) {
       return;
     }
     lastErrorMessage = `Current library: ${switchedPath || "unknown"}`;
-  }
-  for (let attempt = 0; attempt < 8; attempt++) {
-    await sleepMs(180);
-    const verifiedPath = await getCurrentPath();
-    if (verifiedPath === normalizedPath) {
-      currentLibraryPath = normalizedPath;
-      return;
-    }
   }
   if (!lastErrorMessage) {
     try {
@@ -2422,11 +2398,11 @@ async function handlePasteEvent(clipboardEvent, editor, port, pluginInstance) {
         new import_obsidian.Notice("File uploaded successfully");
         const linkUrl = uploadResult && uploadResult.eagleId ? buildEagleInfoUrl(port, uploadResult.eagleId) : "";
         if (linkUrl) {
-          insertUploadedLink(editor, filePath, linkUrl, pluginInstance.settings.imageSize, uploadResult.eagleId);
+          insertUploadedLink(editor, filePath, linkUrl, pluginInstance.settings.imageSize);
           new import_obsidian.Notice("Eagle link converted");
         } else {
           urlEmitter.once("urlUpdated", (latestDirUrl2) => {
-            insertUploadedLink(editor, filePath, latestDirUrl2, pluginInstance.settings.imageSize, parseEagleIdFromInfoUrl(latestDirUrl2));
+            insertUploadedLink(editor, filePath, latestDirUrl2, pluginInstance.settings.imageSize);
             new import_obsidian.Notice("Eagle link converted");
           });
         }
@@ -2436,14 +2412,20 @@ async function handlePasteEvent(clipboardEvent, editor, port, pluginInstance) {
     } else {
       const match = filePath.match(/images\\[^\\]+\.info/);
       if (match) {
+        const fileName = path2.basename(filePath);
+        const fileExt = path2.extname(filePath).toLowerCase();
+        let updatedText;
         const urlPath = match[0].replace(/\\/g, "/");
-        const infoIdMatch = urlPath.match(/^images\/([^/]+)\.info$/i);
-        const eagleId = infoIdMatch && infoIdMatch[1] ? infoIdMatch[1] : "";
-        const fileUrl = `http://localhost:${port}/${urlPath}`;
         const linkedLibraryPath = getLibraryPathByInfoPath(filePath, pluginInstance.settings);
         currentLibraryPath = linkedLibraryPath;
-        clipboardEvent.preventDefault();
-        insertUploadedLink(editor, filePath, fileUrl, pluginInstance.settings.imageSize, eagleId);
+        if ([".png", ".jpg", ".jpeg"].includes(fileExt)) {
+          clipboardEvent.preventDefault();
+          updatedText = `![${fileName}|${pluginInstance.settings.imageSize}](http://localhost:${port}/${urlPath})`;
+        } else {
+          clipboardEvent.preventDefault();
+          updatedText = `[${fileName}](http://localhost:${port}/${urlPath})`;
+        }
+        editor.replaceSelection(updatedText);
         new import_obsidian.Notice("Eagle link converted");
       } else {
         new import_obsidian.Notice("Non-Eagle link");
@@ -2452,10 +2434,8 @@ async function handlePasteEvent(clipboardEvent, editor, port, pluginInstance) {
   }
 }
 async function uploadByClipboard(filePath, pluginInstance) {
-  return runWithUploadRoutingLock(async () => {
   const targetLibraryPath = resolveTargetLibraryPath(filePath, pluginInstance.settings);
   await switchEagleLibrary(targetLibraryPath);
-  await sleepMs(220);
   currentLibraryPath = targetLibraryPath;
   const folderId = pluginInstance.settings.folderId || "";
   const data = {
@@ -2471,15 +2451,8 @@ async function uploadByClipboard(filePath, pluginInstance) {
     body: JSON.stringify(data),
     redirect: "follow"
   };
-  let response = await fetch("http://localhost:41595/api/item/addFromPath", requestOptions);
-  let result = await response.json().catch(() => null);
-  if (!response.ok) {
-    await sleepMs(260);
-    await switchEagleLibrary(targetLibraryPath);
-    await sleepMs(220);
-    response = await fetch("http://localhost:41595/api/item/addFromPath", requestOptions);
-    result = await response.json().catch(() => null);
-  }
+  const response = await fetch("http://localhost:41595/api/item/addFromPath", requestOptions);
+  const result = await response.json().catch(() => null);
   if (!response.ok) {
     throw new Error("Upload Failed");
   }
@@ -2491,13 +2464,10 @@ async function uploadByClipboard(filePath, pluginInstance) {
     eagleId,
     targetLibraryPath
   };
-  });
 }
 async function uploadByUrl(url, pluginInstance, editor) {
-  return runWithUploadRoutingLock(async () => {
   const defaultLibraryPath = resolveTargetLibraryPath("", pluginInstance.settings);
   await switchEagleLibrary(defaultLibraryPath);
-  await sleepMs(220);
   currentLibraryPath = defaultLibraryPath;
   const folderId = pluginInstance.settings.folderId || "";
   const data = {
@@ -2513,17 +2483,11 @@ async function uploadByUrl(url, pluginInstance, editor) {
     redirect: "follow"
   };
   try {
-    let response = await fetch("http://localhost:41595/api/item/addBookmark", requestOptions);
+    const response = await fetch("http://localhost:41595/api/item/addBookmark", requestOptions);
     if (!response.ok) {
-      await sleepMs(260);
-      await switchEagleLibrary(defaultLibraryPath);
-      await sleepMs(220);
-      response = await fetch("http://localhost:41595/api/item/addBookmark", requestOptions);
-      if (!response.ok) {
-        const errorResult = await response.json().catch(() => null);
-        console.error("Error response:", errorResult);
-        throw new Error("Upload Failed");
-      }
+      const errorResult = await response.json();
+      console.error("Error response:", errorResult);
+      throw new Error("Upload Failed");
     }
     urlEmitter.once("urlUpdated", async (latestDirUrl2) => {
       print("latestDirUrl:", latestDirUrl2);
@@ -2557,7 +2521,6 @@ async function uploadByUrl(url, pluginInstance, editor) {
     console.error("Fetch error:", error);
     throw error;
   }
-  });
 }
 async function handleDropEvent(dropEvent, editor, port, pluginInstance) {
   var _a;
@@ -2574,11 +2537,11 @@ async function handleDropEvent(dropEvent, editor, port, pluginInstance) {
           new import_obsidian.Notice("File uploaded successfully");
           const linkUrl = uploadResult && uploadResult.eagleId ? buildEagleInfoUrl(port, uploadResult.eagleId) : "";
           if (linkUrl) {
-            insertUploadedLink(editor, filePath, linkUrl, pluginInstance.settings.imageSize, uploadResult.eagleId);
+            insertUploadedLink(editor, filePath, linkUrl, pluginInstance.settings.imageSize);
             new import_obsidian.Notice("Eagle\u94FE\u63A5\u5DF2\u8F6C\u6362");
           } else {
             urlEmitter.once("urlUpdated", (latestDirUrl2) => {
-              insertUploadedLink(editor, filePath, latestDirUrl2, pluginInstance.settings.imageSize, parseEagleIdFromInfoUrl(latestDirUrl2));
+              insertUploadedLink(editor, filePath, latestDirUrl2, pluginInstance.settings.imageSize);
               new import_obsidian.Notice("Eagle\u94FE\u63A5\u5DF2\u8F6C\u6362");
             });
           }
@@ -2588,13 +2551,18 @@ async function handleDropEvent(dropEvent, editor, port, pluginInstance) {
       } else {
         const match = filePath.match(/images\\[^\\]+\.info/);
         if (match) {
+          const fileName = path2.basename(filePath);
+          const fileExt = path2.extname(filePath).toLowerCase();
+          let updatedText;
           const urlPath = match[0].replace(/\\/g, "/");
-          const infoIdMatch = urlPath.match(/^images\/([^/]+)\.info$/i);
-          const eagleId = infoIdMatch && infoIdMatch[1] ? infoIdMatch[1] : "";
-          const fileUrl = `http://localhost:${port}/${urlPath}`;
           const linkedLibraryPath = getLibraryPathByInfoPath(filePath, pluginInstance.settings);
           currentLibraryPath = linkedLibraryPath;
-          insertUploadedLink(editor, filePath, fileUrl, pluginInstance.settings.imageSize, eagleId);
+          if ([".png", ".jpg", ".jpeg"].includes(fileExt)) {
+            updatedText = `![${fileName}|${pluginInstance.settings.imageSize}](http://localhost:${port}/${urlPath})`;
+          } else {
+            updatedText = `[${fileName}](http://localhost:${port}/${urlPath})`;
+          }
+          editor.replaceSelection(updatedText);
           new import_obsidian.Notice("Eagle\u94FE\u63A5\u5DF2\u8F6C\u6362");
         } else {
           new import_obsidian.Notice("\u975EEagle\u94FE\u63A5");
@@ -2608,143 +2576,6 @@ async function handleDropEvent(dropEvent, editor, port, pluginInstance) {
 function onElement(el, event, selector, listener, options) {
   el.on(event, selector, listener, options);
   return () => el.off(event, selector, listener, options);
-}
-function extractEagleInfoUrl(rawUrl) {
-  if (!rawUrl) {
-    return "";
-  }
-  const match = String(rawUrl).trim().match(/https?:\/\/(?:localhost|127\.0\.0\.1):\d+\/images\/[^/?#\s]+\.info(?:[?#][^\s)]*)?/i);
-  return match && match[0] ? match[0] : "";
-}
-var eagleHandledDomEvents = /* @__PURE__ */ new WeakSet();
-function markEagleDomEventHandled(event) {
-  if (!event || typeof event !== "object") {
-    return true;
-  }
-  if (eagleHandledDomEvents.has(event)) {
-    return false;
-  }
-  eagleHandledDomEvents.add(event);
-  return true;
-}
-function resolveEagleInfoUrlFromTarget(target, allowLineSearch = false) {
-  const baseElement = target instanceof Element ? target : target && target.parentElement ? target.parentElement : null;
-  if (!baseElement) {
-    return "";
-  }
-  const candidates = [];
-  const linkElement = baseElement.closest("a.external-link, a.cm-underline, span.external-link, .cm-link, .cm-url");
-  if (linkElement instanceof HTMLAnchorElement && linkElement.href) {
-    candidates.push(linkElement.href);
-  }
-  const elementWithInfoUrl = baseElement.closest("[data-eagle-info-url]");
-  if (elementWithInfoUrl && elementWithInfoUrl.getAttribute) {
-    candidates.push(elementWithInfoUrl.getAttribute("data-eagle-info-url") || "");
-  }
-  const mediaElement = baseElement.closest("audio,video,iframe,source");
-  if (mediaElement) {
-    const mediaSrc = mediaElement.getAttribute ? mediaElement.getAttribute("src") || "" : "";
-    if (mediaSrc) {
-      candidates.push(mediaSrc);
-    }
-  }
-  const elementWithHref = linkElement && linkElement.getAttribute ? linkElement : baseElement.closest("[href]");
-  if (elementWithHref && elementWithHref.getAttribute) {
-    candidates.push(elementWithHref.getAttribute("data-eagle-info-url") || "");
-    candidates.push(elementWithHref.getAttribute("href") || "");
-    candidates.push(elementWithHref.getAttribute("data-href") || "");
-  }
-  if (linkElement) {
-    candidates.push(linkElement.textContent || "");
-  }
-  if (baseElement !== linkElement) {
-    candidates.push(baseElement.textContent || "");
-  }
-  if (allowLineSearch) {
-    const lineElement = baseElement.closest(".cm-line, .markdown-preview-view");
-    if (lineElement) {
-      candidates.push(lineElement.textContent || "");
-    }
-  }
-  for (const candidate of candidates) {
-    const extractedUrl = extractEagleInfoUrl(candidate);
-    if (extractedUrl) {
-      return extractedUrl;
-    }
-  }
-  return "";
-}
-function eagleLinkContextMenuCall(event) {
-  if (!markEagleDomEventHandled(event)) {
-    return;
-  }
-  const baseElement = event.target instanceof Element ? event.target : event.target && event.target.parentElement ? event.target.parentElement : null;
-  if (baseElement && baseElement.closest("img")) {
-    return;
-  }
-  const url = resolveEagleInfoUrlFromTarget(event.target);
-  if (!url) {
-    return;
-  }
-  event.preventDefault();
-  event.stopPropagation();
-  if (typeof event.stopImmediatePropagation === "function") {
-    event.stopImmediatePropagation();
-  }
-  handleLinkClick(this, event, url);
-}
-var eagleLastPointerPosition = {
-  x: 0,
-  y: 0,
-  time: 0
-};
-function rememberEaglePointerPosition(event) {
-  if (!event) {
-    return;
-  }
-  const x = typeof event.pageX === "number" ? event.pageX : typeof event.clientX === "number" ? event.clientX : eagleLastPointerPosition.x;
-  const y = typeof event.pageY === "number" ? event.pageY : typeof event.clientY === "number" ? event.clientY : eagleLastPointerPosition.y;
-  eagleLastPointerPosition = {
-    x,
-    y,
-    time: Date.now()
-  };
-}
-function interceptEagleInfoNativeNavigation(event) {
-  if (typeof event.button === "number" && event.button === 2) {
-    return "";
-  }
-  rememberEaglePointerPosition(event);
-  const baseElement = event.target instanceof Element ? event.target : event.target && event.target.parentElement ? event.target.parentElement : null;
-  if (baseElement && baseElement.closest("img")) {
-    return "";
-  }
-  const url = resolveEagleInfoUrlFromTarget(event.target, true);
-  if (!url) {
-    return "";
-  }
-  event.preventDefault();
-  event.stopPropagation();
-  if (typeof event.stopImmediatePropagation === "function") {
-    event.stopImmediatePropagation();
-  }
-  return url;
-}
-function eagleLinkClickCall(event) {
-  if (!markEagleDomEventHandled(event)) {
-    return;
-  }
-  const url = interceptEagleInfoNativeNavigation(event);
-  if (!url) {
-    return;
-  }
-  handleLinkClick(this, event, url);
-}
-function eagleLinkNavigationGuardCall(event) {
-  if (!markEagleDomEventHandled(event)) {
-    return;
-  }
-  interceptEagleInfoNativeNavigation(event);
 }
 
 // src/synchronizedpagetabs.ts
@@ -4227,6 +4058,7 @@ var ModifyPropertiesModal = class extends import_obsidian5.Modal {
     new import_obsidian5.Setting(contentEl).addButton((btn) => btn.setButtonText("Save").setCta().onClick(() => {
       const data = {
         id: this.id,
+        // name: this.name,
         tags: this.tags,
         annotation: this.annotation,
         url: this.url
@@ -4412,14 +4244,6 @@ function isAltTextImage(alt) {
 }
 var audioExtsForEmbed = /* @__PURE__ */ new Set(["m4a", "m4b", "mp3", "ogg", "oga", "wav", "aac", "flac", "opus", "weba"]);
 var videoExtsForEmbed = /* @__PURE__ */ new Set(["mp4", "m4v", "mov", "webm", "ogv", "mkv", "avi"]);
-var iframePreviewExtsForEmbed = /* @__PURE__ */ new Set(["pdf", "txt", "md", "markdown", "html", "htm", "csv", "json", "xml", "svg"]);
-function isSafeEmbedExt(ext) {
-  const normalizedExt = (ext || "").toLowerCase();
-  if (!normalizedExt) {
-    return false;
-  }
-  return audioExtsForEmbed.has(normalizedExt) || videoExtsForEmbed.has(normalizedExt) || iframePreviewExtsForEmbed.has(normalizedExt);
-}
 var infoExtCacheForEmbed = /* @__PURE__ */ new Map();
 var infoExtPendingForEmbed = /* @__PURE__ */ new Map();
 function getInfoExtFromLocalHostUrl(urlStr) {
@@ -4564,11 +4388,7 @@ var LocalHostEmbedder = class {
       console.log(`[Eagle-Embed] \u8DF3\u8FC7\u56FE\u7247\u5D4C\u5165: ${alt}, URL: ${src}`);
       return false;
     }
-    if (!isLocalHostLink(src)) {
-      return false;
-    }
-    const ext = getInfoExtFromLocalHostUrl(src);
-    return isSafeEmbedExt(ext);
+    return isLocalHostLink(src);
   }
 };
 var embedManager = new LocalHostEmbedder();
@@ -4607,14 +4427,12 @@ var EmbedWidget = class extends import_view.WidgetType {
           return;
         clear();
         this.container.className = "eagle-audio-container cm-embed-block";
-        this.container.setAttribute("data-eagle-info-url", this.url);
         const audio = document.createElement("audio");
         audio.controls = true;
         audio.autoplay = false;
         audio.loop = false;
         audio.preload = "metadata";
         audio.src = this.url;
-        audio.setAttribute("data-eagle-info-url", this.url);
         audio.style.width = "100%";
         audio.className = "eagle-audio-player";
         this.container.appendChild(audio);
@@ -4624,7 +4442,6 @@ var EmbedWidget = class extends import_view.WidgetType {
           return;
         clear();
         this.container.className = "eagle-video-container cm-embed-block";
-        this.container.setAttribute("data-eagle-info-url", this.url);
         const video = document.createElement("video");
         video.controls = true;
         video.autoplay = false;
@@ -4632,7 +4449,6 @@ var EmbedWidget = class extends import_view.WidgetType {
         video.preload = "metadata";
         video.playsInline = true;
         video.src = this.url;
-        video.setAttribute("data-eagle-info-url", this.url);
         video.style.width = "100%";
         video.style.height = "auto";
         video.className = "eagle-video-player";
@@ -4643,10 +4459,8 @@ var EmbedWidget = class extends import_view.WidgetType {
           return;
         clear();
         this.container.className = "eagle-embed-container cm-embed-block";
-        this.container.setAttribute("data-eagle-info-url", this.url);
         const iframe = document.createElement("iframe");
         iframe.src = this.url;
-        iframe.setAttribute("data-eagle-info-url", this.url);
         iframe.width = "100%";
         iframe.height = "500px";
         iframe.style.border = "none";
@@ -4663,14 +4477,9 @@ var EmbedWidget = class extends import_view.WidgetType {
           renderAudio();
         } else if (ext && videoExtsForEmbed.has(ext)) {
           renderVideo();
-        } else if (ext && iframePreviewExtsForEmbed.has(ext)) {
+        } else if (ext) {
           renderIframe();
         } else {
-          this.container.className = "eagle-embed-placeholder cm-embed-block";
-          this.container.textContent = "\u4E0D\u81EA\u52A8\u9884\u89C8\u8BE5\u9644\u4EF6\u7C7B\u578B\uFF0C\u8BF7\u53F3\u952E\u94FE\u63A5\u4F7F\u7528 Eagle \u83DC\u5355\u3002";
-          return this.container;
-        }
-        if (!ext) {
           this.container.className = "eagle-embed-placeholder cm-embed-block";
           this.container.textContent = "\u52A0\u8F7D\u4E2D...";
           getInfoExtFromLocalHostUrlAsync(this.url).then((ext2) => {
@@ -4684,21 +4493,17 @@ var EmbedWidget = class extends import_view.WidgetType {
               renderVideo();
               return;
             }
-            if (ext2 && iframePreviewExtsForEmbed.has(ext2)) {
+            if (ext2) {
               renderIframe();
               return;
             }
             this.container.className = "eagle-embed-placeholder cm-embed-block";
-            if (ext2) {
-              this.container.textContent = "\u4E0D\u81EA\u52A8\u9884\u89C8\u8BE5\u9644\u4EF6\u7C7B\u578B\uFF0C\u8BF7\u53F3\u952E\u94FE\u63A5\u4F7F\u7528 Eagle \u83DC\u5355\u3002";
-            } else {
-              this.container.textContent = "\u65E0\u6CD5\u5F97\u5230\u9644\u4EF6\u4FE1\u606F\uFF0C\u8BF7\u53F3\u952E\u94FE\u63A5\u4F7F\u7528 Eagle \u83DC\u5355\u3002";
-            }
+            this.container.textContent = "\u65E0\u6CD5\u5F97\u5230\u9644\u4EF6\u4FE1\u606F\uFF0C\u70B9\u51FB\u6253\u5F00\u94FE\u63A5\u3002";
           });
         }
       } else {
         this.container.classList.add("eagle-embed-placeholder");
-        this.container.textContent = "\u4E0D\u81EA\u52A8\u9884\u89C8\u8BE5\u9644\u4EF6\u7C7B\u578B\uFF0C\u8BF7\u53F3\u952E\u94FE\u63A5\u4F7F\u7528 Eagle \u83DC\u5355\u3002";
+        this.container.textContent = `\u4E0D\u652F\u6301\u7684\u5D4C\u5165\u5185\u5BB9: ${this.url.substring(0, 50)}...`;
       }
     } catch (error) {
       this.showError(`\u5904\u7406\u5D4C\u5165\u65F6\u51FA\u9519: ${error}`);
@@ -4791,12 +4596,6 @@ var MyPlugin = class extends import_obsidian7.Plugin {
     console.log("\u52A0\u8F7D Eagle-Embed \u63D2\u4EF6");
     await this.loadSettings();
     currentLibraryPath = this.settings.libraryPath1 || this.settings.libraryPath || "";
-    this.registerDocument(document);
-    this.registerEvent(
-      this.app.workspace.on("window-open", (workspaceWindow, window2) => {
-        this.registerDocument(window2.document);
-      })
-    );
     const audioExts = /* @__PURE__ */ new Set(["m4a", "m4b", "mp3", "ogg", "oga", "wav", "aac", "flac", "opus", "weba"]);
     const audioInfoExtCache = /* @__PURE__ */ new Map();
     const getInfoExtFromId = (id) => {
@@ -4841,16 +4640,9 @@ var MyPlugin = class extends import_obsidian7.Plugin {
         if (!isURL(href) || !isLocalHostLink(href)) {
           return;
         }
-        const infoUrl = extractEagleInfoUrl(href);
-        if (infoUrl) {
-          link.setAttribute("data-eagle-info-url", infoUrl);
-          link.setAttribute("href", "#");
-          link.removeAttribute("target");
-          link.removeAttribute("rel");
-        }
         let url;
         try {
-          url = new URL(infoUrl || href);
+          url = new URL(href);
         } catch (e) {
           return;
         }
@@ -4861,16 +4653,6 @@ var MyPlugin = class extends import_obsidian7.Plugin {
         const id = match[1];
         const ext = getInfoExtFromId(id);
         if (!ext || !audioExts.has(ext)) {
-          if (ext) {
-            const embedExts = /* @__PURE__ */ new Set(["pdf", "txt", "md", "markdown", "html", "htm", "csv", "json", "xml", "svg"]);
-            if (videoExtsForEmbed.has(ext) || embedExts.has(ext)) {
-              const block = document.createElement("div");
-              block.className = "eagle-embed-placeholder cm-embed-block eagle-link-block";
-              block.setAttribute("data-eagle-info-url", infoUrl || href);
-              block.textContent = `${ext.toUpperCase()} · Eagle item (\u53F3\u952E\u6253\u5F00\u83DC\u5355)`;
-              link.replaceWith(block);
-            }
-          }
           return;
         }
         const audio = document.createElement("audio");
@@ -4883,18 +4665,10 @@ var MyPlugin = class extends import_obsidian7.Plugin {
         audio.className = "eagle-audio-player";
         link.replaceWith(audio);
       });
-      const safeLinks = el.querySelectorAll("a[href]");
-      safeLinks.forEach((link) => {
-        const href = link.getAttribute("href") || "";
-        const infoUrl = extractEagleInfoUrl(href);
-        if (!infoUrl) {
-          return;
-        }
-        link.setAttribute("data-eagle-info-url", infoUrl);
-        link.setAttribute("href", "#");
-        link.removeAttribute("target");
-        link.removeAttribute("rel");
-      });
+    });
+    this.registerDocument(document);
+    this.app.workspace.on("window-open", (workspaceWindow, window2) => {
+      this.registerDocument(window2.document);
     });
     startServer(this.settings.libraryPath1 || this.settings.libraryPath || "", this.settings.port);
     this.addSettingTab(new SampleSettingTab(this.app, this));
@@ -4909,6 +4683,60 @@ var MyPlugin = class extends import_obsidian7.Plugin {
       })
     );
     setDebug6(this.settings.debug);
+    this.registerDomEvent(document, "click", async (event) => {
+      const target = event.target;
+      const activeView = this.app.workspace.getActiveViewOfType(import_obsidian7.MarkdownView);
+      if (!activeView) {
+        print("Cannot find the active view");
+        return;
+      }
+      const inPreview = activeView.getMode() === "preview";
+      let url = null;
+      if (inPreview) {
+        if (!target.matches("a.external-link")) {
+          return;
+        }
+        const linkElement = target;
+        if (linkElement && linkElement.href) {
+          url = linkElement.href;
+          print(`Preview mode link: ${url}`);
+        }
+      } else {
+        if (!target.matches("span.external-link, .cm-link, a.cm-underline")) {
+          return;
+        }
+        const editor = activeView.editor;
+        const cursor = editor.getCursor();
+        const lineText = editor.getLine(cursor.line);
+        const urlMatches = Array.from(lineText.matchAll(/\bhttps?:\/\/[^\s)]+/g));
+        print(urlMatches);
+        let closestUrl = null;
+        let minDistance = Infinity;
+        const cursorPos = cursor.ch;
+        print(cursorPos);
+        for (let i = 0; i < urlMatches.length; i++) {
+          const match = urlMatches[i];
+          const end = (match.index || 0) + match[0].length + 1;
+          if (cursorPos <= end) {
+            closestUrl = match[0];
+            print(`Cursor is in the link interval: ${i + 1}`);
+            break;
+          }
+        }
+        if (closestUrl) {
+          url = closestUrl;
+          print(`Edit mode link: ${url}`);
+        }
+      }
+      if (url && url.match(/^http:\/\/localhost:\d+\/images\/[^.]+\.info$/)) {
+        event.preventDefault();
+        event.stopPropagation();
+        print(`Prevented link: ${url}`);
+        handleLinkClick(this, event, url);
+      } else {
+        return;
+      }
+    }, { capture: true });
     this.registerDomEvent(document, "click", async (evt) => {
       if (!this.settings.clickView)
         return;
@@ -5008,11 +4836,6 @@ var MyPlugin = class extends import_obsidian7.Plugin {
 				text-align: center;
 				margin: 0.5em 0;
 			}
-
-			.eagle-link-block {
-				cursor: context-menu;
-				user-select: none;
-			}
 			
 			/* \u9519\u8BEF\u6837\u5F0F */
 			.eagle-embed-error {
@@ -5067,76 +4890,12 @@ var MyPlugin = class extends import_obsidian7.Plugin {
   }
   // 注册图片右键菜单事件
   registerDocument(document2) {
-    const linkDelegateSelector = "a.external-link, a.cm-underline, span.external-link, .cm-link, .cm-url, [data-eagle-info-url], audio, video, iframe";
-    this.register(
-      onElement(
-        document2,
-        "mousedown",
-        linkDelegateSelector,
-        eagleLinkNavigationGuardCall.bind(this),
-        { capture: true }
-      )
-    );
-    this.register(
-      onElement(
-        document2,
-        "pointerdown",
-        linkDelegateSelector,
-        eagleLinkNavigationGuardCall.bind(this),
-        { capture: true }
-      )
-    );
-    this.register(
-      onElement(
-        document2,
-        "mouseup",
-        linkDelegateSelector,
-        eagleLinkNavigationGuardCall.bind(this),
-        { capture: true }
-      )
-    );
-    this.register(
-      onElement(
-        document2,
-        "pointerup",
-        linkDelegateSelector,
-        eagleLinkNavigationGuardCall.bind(this),
-        { capture: true }
-      )
-    );
-    this.register(
-      onElement(
-        document2,
-        "click",
-        linkDelegateSelector,
-        eagleLinkClickCall.bind(this),
-        { capture: true }
-      )
-    );
-    this.register(
-      onElement(
-        document2,
-        "auxclick",
-        linkDelegateSelector,
-        eagleLinkClickCall.bind(this),
-        { capture: true }
-      )
-    );
     this.register(
       onElement(
         document2,
         "contextmenu",
         "img",
         eagleImageContextMenuCall.bind(this),
-        { capture: true }
-      )
-    );
-    this.register(
-      onElement(
-        document2,
-        "contextmenu",
-        linkDelegateSelector,
-        eagleLinkContextMenuCall.bind(this),
         { capture: true }
       )
     );

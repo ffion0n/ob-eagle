@@ -2,6 +2,8 @@
   "mySetting": "default",
   "port": 6060,
   "libraryPath": "D:\\附件管理.library",
+  "libraryPath1": "D:\\附件管理.library",
+  "libraryPath2": "D:\\资料库.library",
   "folderId": "ME2NP48CXYM3V",
   "clickView": true,
   "adaptiveRatio": 0.8,
@@ -10,7 +12,8 @@
   "imageSize": 500,
   "websiteUpload": false,
   "libraryPaths": [
-    "D:\\附件管理.library"
+    "D:\\附件管理.library",
+    "D:\\资料库.library"
   ],
   "debug": false,
   "openInObsidian": "newPage",
