@@ -1,0 +1,30 @@
+{
+  "id": "eagle-plugin-obsidian-special-copy",
+  "version": "1.1.2",
+  "platform": "all",
+  "arch": "all",
+  "name": "\u590d\u5236\u5230Obsidian",
+  "logo": "/obsidian.svg",
+  "keywords": [
+    "obsidian",
+    "copy",
+    "reuse",
+    "eagle"
+  ],
+  "devTools": false,
+  "main": {
+    "serviceMode": true,
+    "url": "index.html",
+    "frame": false,
+    "transparent": true,
+    "resizable": false,
+    "movable": false,
+    "minimizable": false,
+    "maximizable": false,
+    "fullscreenable": false,
+    "width": 2,
+    "height": 2,
+    "minWidth": 2,
+    "minHeight": 2
+  }
+}
