@@ -1912,7 +1912,7 @@ function startServer(libraryPath, port) {
     activeLibraryWatchers.push(watcher);
   }
   const retryDelayMs = 120;
-  const maxRetries = 15;
+  const maxRetries = 60;
   const shouldRetryError = (err) => {
     return err && ["ENOENT", "EBUSY", "EPERM"].includes(err.code);
   };
@@ -2034,22 +2034,22 @@ function startServer(libraryPath, port) {
     const filePath = path.join(resolvedLibraryPath, pathname);
     const imagesRoot = path.join(resolvedLibraryPath, "images") + path.sep;
     if (!resolvedLibraryPath || !filePath.startsWith(imagesRoot)) {
-      res.writeHead(404);
+      res.writeHead(404, { "Cache-Control": "no-store" });
       res.end();
       return;
     }
-    fs.stat(filePath, (err, stats) => {
+    statWithRetry(filePath, 0, (err, stats) => {
       if (err) {
         if (err.code === "ENOENT") {
-          res.writeHead(404).end();
+          res.writeHead(404, { "Cache-Control": "no-store" }).end();
         } else {
-          res.writeHead(500).end("Internal Error");
+          res.writeHead(500, { "Cache-Control": "no-store", "Content-Type": "text/plain" }).end("Internal Error");
         }
         return;
       }
       if (stats.isDirectory()) {
         const jsonFilePath = path.join(filePath, "metadata.json");
-        const maxParseRetries = 5;
+        const maxParseRetries = 30;
         const tryReadMetadata = (parseAttempt = 0) => {
           readFileWithRetry(jsonFilePath, "utf8", 0, (err2, data) => {
           if (err2) {
@@ -2057,7 +2057,7 @@ function startServer(libraryPath, port) {
                 res.writeHead(404, { "Cache-Control": "no-store" }).end();
               } else {
                 console.error("Error reading JSON file:", err2);
-                res.writeHead(500, { "Content-Type": "text/plain" });
+                res.writeHead(500, { "Cache-Control": "no-store", "Content-Type": "text/plain" });
                 res.end("Internal Server Error");
               }
           } else {
@@ -2095,7 +2095,7 @@ function startServer(libraryPath, port) {
                   return;
                 }
                 console.error("Error parsing JSON:", parseErr);
-                res.writeHead(500, { "Content-Type": "text/plain" });
+                res.writeHead(500, { "Cache-Control": "no-store", "Content-Type": "text/plain" });
                 res.end("Error parsing JSON");
             }
           }
@@ -2108,7 +2108,7 @@ function startServer(libraryPath, port) {
         if (ext === ".url") {
           readFileWithRetry(filePath, void 0, 0, (err2, data) => {
             if (err2) {
-              res.writeHead(500, { "Content-Type": "text/plain" });
+              res.writeHead(500, { "Cache-Control": "no-store", "Content-Type": "text/plain" });
               res.end("Internal Server Error");
               return;
             }
@@ -2617,6 +2617,49 @@ function extractEagleInfoUrl(rawUrl) {
   return match && match[0] ? match[0] : "";
 }
 var eagleHandledDomEvents = /* @__PURE__ */ new WeakSet();
+var eagleHandledImagesForRetry = /* @__PURE__ */ new WeakSet();
+function setupEagleImageAutoRetry(img, maxAttempts = 8) {
+  if (!img || typeof img !== "object") {
+    return;
+  }
+  if (eagleHandledImagesForRetry.has(img)) {
+    return;
+  }
+  const rawSrc = img.getAttribute && img.getAttribute("src") ? img.getAttribute("src") : img.src || "";
+  const infoUrl = extractEagleInfoUrl(rawSrc);
+  if (!infoUrl) {
+    return;
+  }
+  eagleHandledImagesForRetry.add(img);
+  img.dataset.eagleBridgeRetryBase = infoUrl;
+  img.dataset.eagleBridgeRetryCount = "0";
+  const scheduleRetry = () => {
+    if (!img.isConnected) {
+      return;
+    }
+    const count = Number(img.dataset.eagleBridgeRetryCount || "0");
+    if (!Number.isFinite(count) || count >= maxAttempts) {
+      return;
+    }
+    img.dataset.eagleBridgeRetryCount = String(count + 1);
+    const delay = Math.min(2e3, 120 + count * 180);
+    setTimeout(() => {
+      if (!img.isConnected) {
+        return;
+      }
+      const base = img.dataset.eagleBridgeRetryBase || infoUrl;
+      try {
+        const u = new URL(base);
+        u.searchParams.set("eb_retry", String(Date.now()));
+        img.src = u.toString();
+      } catch (e) {
+        const sep = base.includes("?") ? "&" : "?";
+        img.src = `${base}${sep}eb_retry=${Date.now()}`;
+      }
+    }, delay);
+  };
+  img.addEventListener("error", scheduleRetry);
+}
 function markEagleDomEventHandled(event) {
   if (!event || typeof event !== "object") {
     return true;
@@ -4830,6 +4873,8 @@ var MyPlugin = class extends import_obsidian7.Plugin {
         if (embedManager.shouldEmbed(image.src)) {
           print(`MarkdownPostProcessor \u627E\u5230\u53EF\u5D4C\u5165\u56FE\u50CF: ${image.src}`);
           this.handleImage(image);
+        } else {
+          setupEagleImageAutoRetry(image);
         }
       });
       const links = el.querySelectorAll("a.external-link");
