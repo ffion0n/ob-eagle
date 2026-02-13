@@ -10,6 +10,7 @@
   "advancedID": false,
   "obsidianStoreId": "",
   "imageSize": 500,
+  "wheelResizeModifier": "ctrl",
   "websiteUpload": false,
   "libraryPaths": [
     "D:\\附件管理.library",

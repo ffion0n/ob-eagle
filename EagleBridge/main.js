@@ -2660,6 +2660,116 @@ function setupEagleImageAutoRetry(img, maxAttempts = 8) {
   };
   img.addEventListener("error", scheduleRetry);
 }
+function isEagleWheelResizeModifierPressed(event, modifier) {
+  if (!event || !modifier) {
+    return false;
+  }
+  if (modifier === "ctrl") {
+    return !!event.ctrlKey;
+  }
+  if (modifier === "alt") {
+    return !!event.altKey;
+  }
+  if (modifier === "shift") {
+    return !!event.shiftKey;
+  }
+  return false;
+}
+function clampEagleWheelResizeNumber(value, min, max) {
+  if (!Number.isFinite(value)) {
+    return min;
+  }
+  return Math.min(max, Math.max(min, value));
+}
+function parseEagleMarkdownImageAltSizeToken(rawAlt) {
+  const alt = String(rawAlt || "");
+  const pipeIndex = alt.lastIndexOf("|");
+  if (pipeIndex >= 0) {
+    const token = alt.slice(pipeIndex + 1).trim();
+    if (migrateIsImageSizeToken(token)) {
+      return { altText: alt.slice(0, pipeIndex), sizeToken: token };
+    }
+  }
+  return { altText: alt, sizeToken: null };
+}
+function computeNextEagleMarkdownImageSizeToken(currentToken, deltaY, fallbackToken) {
+  if (!Number.isFinite(deltaY) || deltaY === 0) {
+    return null;
+  }
+  const factor = deltaY > 0 ? 0.95 : 1.05;
+  const normalizedFallback = typeof fallbackToken === "string" && migrateIsImageSizeToken(fallbackToken.trim()) ? fallbackToken.trim() : "500";
+  const baseToken = typeof currentToken === "string" && migrateIsImageSizeToken(currentToken.trim()) ? currentToken.trim() : normalizedFallback;
+  const clampSize = (n) => Math.round(clampEagleWheelResizeNumber(n, 50, 5e3));
+  if (/x/i.test(baseToken)) {
+    const parts = baseToken.split(/x/i, 2);
+    const w = parseInt(parts[0] || "", 10);
+    const h = parseInt(parts[1] || "", 10);
+    if (!Number.isFinite(w) || w <= 0) {
+      return null;
+    }
+    const nextW = clampSize(w * factor);
+    if (Number.isFinite(h) && h > 0) {
+      const nextH = clampSize(h * factor);
+      return `${nextW}x${nextH}`;
+    }
+    return String(nextW);
+  }
+  const w = parseInt(baseToken, 10);
+  if (!Number.isFinite(w) || w <= 0) {
+    return null;
+  }
+  return String(clampSize(w * factor));
+}
+function findEagleMarkdownImageInLine(lineText, eagleId, offset) {
+  const id = String(eagleId || "").trim();
+  if (!id) {
+    return null;
+  }
+  const safeId = escapeRegExp(id);
+  const re = new RegExp(`!\\\\[([^\\\\]]*)\\\\]\\\\(([^)]*\\\\/images\\\\/${safeId}\\\\.info[^)]*)\\\\)`, "gi");
+  const at = typeof offset === "number" && Number.isFinite(offset) ? offset : 0;
+  let best = null;
+  let match;
+  while ((match = re.exec(lineText)) !== null) {
+    const start = match.index;
+    const end = start + match[0].length;
+    const inside = at >= start && at <= end;
+    const dist = inside ? -1 : Math.min(Math.abs(at - start), Math.abs(at - end));
+    if (!best || dist < best.dist) {
+      best = { dist, start, end, altRaw: match[1], urlRaw: match[2] };
+      if (dist === -1) {
+        break;
+      }
+    }
+  }
+  if (!best) {
+    return null;
+  }
+  return { start: best.start, end: best.end, altRaw: best.altRaw, urlRaw: best.urlRaw };
+}
+function resolveMarkdownEditorViewForTarget(app, eventTarget) {
+  const node = typeof Node !== "undefined" && eventTarget instanceof Node ? eventTarget : null;
+  const leaves = app && app.workspace && typeof app.workspace.getLeavesOfType === "function" ? app.workspace.getLeavesOfType("markdown") : [];
+  for (const leaf of leaves || []) {
+    const view = leaf && leaf.view ? leaf.view : null;
+    if (!view || !(view instanceof import_obsidian7.MarkdownView)) {
+      continue;
+    }
+    const containerEl = view.containerEl;
+    if (node && containerEl && typeof containerEl.contains === "function" && !containerEl.contains(node)) {
+      continue;
+    }
+    const editor = view.editor;
+    const editorView = editor && editor.cm ? editor.cm : null;
+    if (editorView) {
+      return editorView;
+    }
+  }
+  const fallbackView = app && app.workspace && typeof app.workspace.getActiveViewOfType === "function" ? app.workspace.getActiveViewOfType(import_obsidian7.MarkdownView) : null;
+  const fallbackEditor = fallbackView == null ? void 0 : fallbackView.editor;
+  const fallbackEditorView = fallbackEditor && fallbackEditor.cm ? fallbackEditor.cm : null;
+  return fallbackEditorView || null;
+}
 function markEagleDomEventHandled(event) {
   if (!event || typeof event !== "object") {
     return true;
@@ -2683,6 +2793,17 @@ function resolveEagleInfoUrlFromTarget(target, allowLineSearch = false) {
   const elementWithInfoUrl = baseElement.closest("[data-eagle-info-url]");
   if (elementWithInfoUrl && elementWithInfoUrl.getAttribute) {
     candidates.push(elementWithInfoUrl.getAttribute("data-eagle-info-url") || "");
+  }
+  const imgElement = baseElement.closest("img");
+  if (imgElement && imgElement.getAttribute) {
+    const imgSrc = imgElement.getAttribute("src") || "";
+    if (imgSrc) {
+      candidates.push(imgSrc);
+    }
+    const imgDataSrc = imgElement.getAttribute("data-src") || "";
+    if (imgDataSrc) {
+      candidates.push(imgDataSrc);
+    }
   }
   const mediaElement = baseElement.closest("audio,video,iframe,source");
   if (mediaElement) {
@@ -3007,6 +3128,7 @@ var DEFAULT_SETTINGS = {
   advancedID: false,
   obsidianStoreId: "",
   imageSize: void 0,
+  wheelResizeModifier: "alt",
   websiteUpload: false,
   libraryPaths: [],
   debug: false,
@@ -3053,6 +3175,12 @@ var SampleSettingTab = class extends import_obsidian4.PluginSettingTab {
       var _a;
       return text.setPlaceholder("Enter image size").setValue(((_a = this.plugin.settings.imageSize) == null ? void 0 : _a.toString()) || "").onChange(async (value) => {
         this.plugin.settings.imageSize = value ? parseInt(value) : void 0;
+        await this.plugin.saveSettings();
+      });
+    });
+    new import_obsidian4.Setting(containerEl).setName("Resize image size by mouse wheel").setDesc("Hold the modifier key and use mouse wheel to resize Eagle images (changes the |500 token).").addDropdown((dropdown) => {
+      dropdown.addOption("alt", "Alt").addOption("ctrl", "Ctrl").addOption("shift", "Shift").setValue(this.plugin.settings.wheelResizeModifier || "alt").onChange(async (value) => {
+        this.plugin.settings.wheelResizeModifier = value;
         await this.plugin.saveSettings();
       });
     });
@@ -4964,6 +5092,71 @@ var MyPlugin = class extends import_obsidian7.Plugin {
         removeZoomedImage();
       }
     });
+    this.registerDomEvent(document, "wheel", (evt) => {
+      try {
+        const modifier = this.settings.wheelResizeModifier;
+        if (!modifier || !isEagleWheelResizeModifierPressed(evt, modifier)) {
+          return;
+        }
+        const target = evt.target instanceof Element ? evt.target : null;
+        if (target && target.closest && target.closest("#af-zoomed-image, .af-scale-div")) {
+          return;
+        }
+        const infoUrl = resolveEagleInfoUrlFromTarget(evt.target, true);
+        if (!infoUrl) {
+          return;
+        }
+        const eagleId = parseEagleIdFromInfoUrl(infoUrl);
+        if (!eagleId) {
+          return;
+        }
+        const editorView = resolveMarkdownEditorViewForTarget(this.app, evt.target);
+        if (!editorView) {
+          return;
+        }
+        let pos = null;
+        try {
+          if (editorView.dom && evt.target && editorView.dom.contains(evt.target)) {
+            pos = editorView.posAtDOM(evt.target);
+          }
+        } catch (e) {
+        }
+        if (pos == null && typeof editorView.posAtCoords === "function") {
+          try {
+            pos = editorView.posAtCoords({ x: evt.clientX, y: evt.clientY });
+          } catch (e) {
+          }
+        }
+        if (pos == null) {
+          return;
+        }
+        const line = editorView.state.doc.lineAt(pos);
+        const offset = pos - line.from;
+        const match = findEagleMarkdownImageInLine(line.text, eagleId, offset);
+        if (!match) {
+          return;
+        }
+        const { altText, sizeToken } = parseEagleMarkdownImageAltSizeToken(match.altRaw);
+        const fallbackToken = this.settings.imageSize ? String(this.settings.imageSize) : "500";
+        const nextToken = computeNextEagleMarkdownImageSizeToken(sizeToken, evt.deltaY, fallbackToken);
+        if (!nextToken) {
+          return;
+        }
+        print("EagleBridge wheel resize:", { from: sizeToken || fallbackToken, to: nextToken, url: match.urlRaw });
+        const nextAltRaw = `${altText}|${nextToken}`;
+        const replacement = `![${nextAltRaw}](${match.urlRaw})`;
+        evt.preventDefault();
+        evt.stopPropagation();
+        editorView.dispatch({
+          changes: {
+            from: line.from + match.start,
+            to: line.from + match.end,
+            insert: replacement
+          }
+        });
+      } catch (e) {
+      }
+    }, { capture: true, passive: false });
     addCommandSynchronizedPageTabs(this);
     addCommandEagleJump(this);
     addCommandEagleBridgeMigrateAttachments(this);
