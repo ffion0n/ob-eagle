@@ -1,0 +1,31 @@
+{
+  "id": "eagle-plugin-copy-imagebed-link",
+  "version": "1.0.0",
+  "platform": "all",
+  "arch": "all",
+  "name": "复制ealge图床链接",
+  "logo": "/link.svg",
+  "keywords": [
+    "copy",
+    "link",
+    "imagebed",
+    "eagle"
+  ],
+  "devTools": false,
+  "main": {
+    "serviceMode": true,
+    "url": "index.html",
+    "frame": false,
+    "transparent": true,
+    "resizable": false,
+    "movable": false,
+    "minimizable": false,
+    "maximizable": false,
+    "fullscreenable": false,
+    "width": 2,
+    "height": 2,
+    "minWidth": 2,
+    "minHeight": 2
+  }
+}
+
